@@ -5,6 +5,7 @@ require('dotenv').config()
 const mongoose = require("mongoose")
 const bodyParser = require("body-parser")
 mongoose.connect(process.env.MONGO_URI,{ useNewUrlParser: true, useUnifiedTopology: true });
+const { ObjectId } = require('mongoose').Types;
 app.use(bodyParser.urlencoded({ extended: true }))
 app.use(cors())
 app.use(express.static('public'))
@@ -79,50 +80,102 @@ app.get('/api/users', async function(req, res){
 })
 
 app.get('/api/users/:_id/logs', async function(req, res){
-  const _id = req.params._id
-  const from = req.query.from;
-  const to = req.query.to;
-  const limit = req.query.limit
-
   try{
-    if(limit != null && from != null && to != null){
-      const from = req.query.from ? new Date(req.query.from) : new Date();
-      const to = req.query.to ? new Date(req.query.to) : new Date();
-      const user = await User.findOne(
-        { _id: _id},
-        { log: { $elemMatch: { date: { $gte: from, $lt: to } } } },
-        { log: { $slice: -limit } }
-      )
-      res.json({
-        _id: user._id,
-        username: user.username,
-        from: from.toDateString(),
-        to: to.toDateString(),
-        count: user.log.length,
-        log: user.log.map(log => ({
-          description: log.description,
-          duration: log.duration,
-          date: log.date.toDateString()
-        })),
-      })
-    }else{
-      const user = await User.findOne({ _id: _id })
-      res.json({
-        _id: user._id,
-        username: user.username,
-        count: user.log.length,
-        log: user.log.map(log => ({
-          description: log.description,
-          duration: log.duration,
-          date: log.date.toDateString()
-        })),
-      })
+    const _id = new ObjectId(req.params._id)
+    const from = req.query.from;
+    const to = req.query.to;
+    const limit = req.query.limit
+    console.log(`from : ${from}, to: ${to}, limit: ${limit}, _id: ${_id}`)
+    if(from == null && to==null){
+      if(limit){
+        const user = await User.findOne({ _id: _id }).slice("log",-limit)
+        res.json(objUserLog(user,true))
+      }else{
+        const user = await User.findOne({ _id: _id })
+        res.json(objUserLog(user,true))
+      }
+      
+    }else if(limit != null  && from != null && to!=null ){
+      const from = new Date(req.query.from);
+      const to = new Date(req.query.to);
+      
+      const user = await User.aggregate([
+        { $match: { _id: new ObjectId(_id) } },
+        { $unwind: '$log' },
+        {
+          $match: {
+            'log.date': { $gte: from, $lte: to },
+          },
+        },
+        { $sort: { 'log.date': -1 } },
+        { $limit: parseInt(limit) },
+        {
+          $group: {
+            _id: '$_id',
+            username: { $first: '$username' },
+            log: { $push: '$log' },
+          },
+        },
+      ]);
+      res.json(objUserLog(user,false,from,to))
+    }else if(limit == null){
+      const from = new Date(req.query.from);
+      const to = new Date(req.query.to);
+      const user = await User.aggregate([
+        { $match: { _id: new ObjectId(_id) } },
+        { $unwind: '$log' },
+        {
+          $match: {
+            'log.date': { $gte: from, $lte: to },
+          },
+        },
+        { $sort: { 'log.date': -1 } },
+        {
+          $group: {
+            _id: '$_id',
+            username: { $first: '$username' },
+            log: { $push: '$log' },
+          },
+        },
+      ]);
+      res.json(objUserLog(user,false,from,to))
     }
     
   }catch(error){
     console.log(error)
   }
 })
+
+const objUserLog = (user,isAll,from=null,to=null) =>{
+  if(user==null){
+    return { error: "User Not Found"}
+  }
+  if(isAll){
+    return {
+      _id: user._id,
+      username: user.username,
+      count: user.log.length,
+      log: user.log.map(log => ({
+        description: log.description,
+        duration: log.duration,
+        date: log.date.toDateString()
+      })),
+    }
+  }else{
+    return {
+      _id: user[0]._id,
+      username: user[0].username,
+      from: from.toDateString(),
+      to: to.toDateString(),
+      count: user[0].log.length,
+      log: user[0].log.map(log => ({
+        description: log.description,
+        duration: log.duration,
+        date: log.date.toDateString()
+      })),
+    }
+  }
+}
 
 const listener = app.listen(process.env.PORT || 3000, () => {
   console.log('Your app is listening on port ' + listener.address().port)
